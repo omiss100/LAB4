@@ -1,0 +1,95 @@
+%%writefile transpose.cu
+
+// Partie 1 : Kernel de transposition de matrice
+
+#include <cuda_runtime.h>
+#include <iostream>
+#include <stdio.h>
+
+#define BLOCK_SIZE 32
+#define PADDED_BLOCK_SIZE (BLOCK_SIZE + 1)
+
+// Kernel sans padding
+__global__ void transposeNoPadding(float *input, float *output, int width, int height) {
+    __shared__ float tile[BLOCK_SIZE][BLOCK_SIZE];
+
+    int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int y = blockIdx.y * BLOCK_SIZE + threadIdx.y;
+
+    if (x < width && y < height) {
+        tile[threadIdx.y][threadIdx.x] = input[y * width + x];
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    y = blockIdx.x * BLOCK_SIZE + threadIdx.y;
+
+    if (x < height && y < width) {
+        output[y * height + x] = tile[threadIdx.x][threadIdx.y];
+    }
+}
+
+// Kernel avec padding
+__global__ void transposeWithPadding(float *input, float *output, int width, int height) {
+    __shared__ float tile[BLOCK_SIZE][PADDED_BLOCK_SIZE];
+
+    int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int y = blockIdx.y * BLOCK_SIZE + threadIdx.y;
+
+    if (x < width && y < height) {
+        tile[threadIdx.y][threadIdx.x] = input[y * width + x];
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    y = blockIdx.x * BLOCK_SIZE + threadIdx.y;
+
+    if (x < height && y < width) {
+        output[y * height + x] = tile[threadIdx.x][threadIdx.y];
+    }
+}
+
+int main() {
+    const int width = 1024, height = 1024;
+    const int size = width * height * sizeof(float);
+
+    float *h_input = (float *)malloc(size);
+    float *h_output = (float *)malloc(size);
+
+    // Initialisation de la matrice
+    for (int i = 0; i < width * height; ++i) {
+        h_input[i] = static_cast<float>(i);
+    }
+
+    float *d_input, *d_output;
+    cudaMalloc(&d_input, size);
+    cudaMalloc(&d_output, size);
+
+    cudaMemcpy(d_input, h_input, size, cudaMemcpyHostToDevice);
+
+    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 gridDim((width + BLOCK_SIZE - 1) / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+    // Transposition sans padding
+    transposeNoPadding<<<gridDim, blockDim>>>(d_input, d_output, width, height);
+    cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
+
+    // Vérification des résultats
+    std::cout << "Transposition sans padding terminée." << std::endl;
+
+    // Transposition avec padding
+    transposeWithPadding<<<gridDim, blockDim>>>(d_input, d_output, width, height);
+    cudaMemcpy(h_output, d_output, size, cudaMemcpyDeviceToHost);
+
+    // Vérification des résultats
+    std::cout << "Transposition avec padding terminée." << std::endl;
+
+    cudaFree(d_input);
+    cudaFree(d_output);
+    free(h_input);
+    free(h_output);
+
+    return 0;
+}
