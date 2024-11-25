@@ -1,0 +1,102 @@
+%%writefile parallel_reduction.cu
+
+// Partie 2 : Kernels de réduction parallèle
+
+#include <cuda_runtime.h>
+#include <stdio.h>
+
+// Taille du bloc pour la réduction
+#define BLOCK_SIZE 1024
+
+// Kernel de réduction parallèle avec mémoire partagée
+__global__ void reductionSharedMemory(float *input, float *output, int size) {
+    __shared__ float sharedData[BLOCK_SIZE];
+
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Initialisation des données dans la mémoire partagée
+    sharedData[tid] = (idx < size) ? input[idx] : 0.0f;
+    __syncthreads();
+
+    // Réduction parallèle dans la mémoire partagée
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            sharedData[tid] += sharedData[tid + stride];
+        }
+        __syncthreads();
+    }
+
+    // Le thread 0 écrit le résultat dans la mémoire globale
+    if (tid == 0) {
+        output[blockIdx.x] = sharedData[0];
+    }
+}
+
+// Kernel de réduction parallèle avec instructions de shuffle
+__global__ void reductionShuffle(float *input, float *output, int size) {
+    float sum = 0.0f;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx < size) {
+        sum = input[idx];
+    }
+
+    // Réduction parallèle avec shuffle
+    for (int stride = warpSize / 2; stride > 0; stride >>= 1) {
+        sum += __shfl_down_sync(0xffffffff, sum, stride);
+    }
+
+    // Le premier thread du warp écrit dans la mémoire globale
+    if ((threadIdx.x % warpSize) == 0) {
+        atomicAdd(output, sum);
+    }
+}
+
+int main() {
+    const int size = 1 << 20;  // Taille du tableau (1M éléments)
+    const int numBlocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    // Allocation de la mémoire hôte et GPU
+    float *h_input = (float *)malloc(size * sizeof(float));
+    float *h_output = (float *)malloc(numBlocks * sizeof(float));
+    float *d_input, *d_output;
+    cudaMalloc(&d_input, size * sizeof(float));
+    cudaMalloc(&d_output, numBlocks * sizeof(float));
+
+    // Initialisation des données d'entrée
+    for (int i = 0; i < size; ++i) {
+        h_input[i] = 1.0f;  // Remplir avec des 1 pour simplifier
+    }
+
+    cudaMemcpy(d_input, h_input, size * sizeof(float), cudaMemcpyHostToDevice);
+
+    // Lancer le kernel avec mémoire partagée
+    dim3 blockDim(BLOCK_SIZE);
+    dim3 gridDim(numBlocks);
+
+    reductionSharedMemory<<<gridDim, blockDim>>>(d_input, d_output, size);
+    cudaMemcpy(h_output, d_output, numBlocks * sizeof(float), cudaMemcpyDeviceToHost);
+
+    // Réduction finale sur CPU (pour mémoire partagée)
+    float finalSum = 0.0f;
+    for (int i = 0; i < numBlocks; ++i) {
+        finalSum += h_output[i];
+    }
+    printf("Somme totale (mémoire partagée) : %f\n", finalSum);
+
+    // Réinitialiser le tableau de sortie pour la méthode shuffle
+    cudaMemset(d_output, 0, sizeof(float));
+    reductionShuffle<<<gridDim, blockDim>>>(d_input, d_output, size);
+    cudaMemcpy(h_output, d_output, sizeof(float), cudaMemcpyDeviceToHost);
+
+    printf("Somme totale (shuffle) : %f\n", h_output[0]);
+
+    // Libération de la mémoire
+    free(h_input);
+    free(h_output);
+    cudaFree(d_input);
+    cudaFree(d_output);
+
+    return 0;
+}
