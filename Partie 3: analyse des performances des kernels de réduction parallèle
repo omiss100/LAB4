@@ -1,6 +1,6 @@
 %%writefile parallel_reduction_analysis.cu
 
-// Parti 3: analyse des performances des kernels de réduction parallèle
+// Partie 3: analyse des performances des kernels de réduction parallèle
 
 #include <cuda_runtime.h>
 #include <stdio.h>
