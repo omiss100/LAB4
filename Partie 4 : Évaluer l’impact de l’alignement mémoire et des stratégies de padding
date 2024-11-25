@@ -1,0 +1,107 @@
+%%writefile shared_memory_padding.cu
+
+//Partie 4 : Évaluer l’impact de l’alignement mémoire et des stratégies de padding
+
+#include <cuda_runtime.h>
+#include <stdio.h>
+
+#define BLOCK_SIZE 32
+#define PADDED_BLOCK_SIZE (BLOCK_SIZE + 1)  // Padding pour éviter les conflits de banque
+
+// Kernel sans padding
+__global__ void matrixTransposeNoPadding(float *input, float *output, int width, int height) {
+    __shared__ float tile[BLOCK_SIZE][BLOCK_SIZE];
+
+    int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int y = blockIdx.y * BLOCK_SIZE + threadIdx.y;
+
+    if (x < width && y < height) {
+        tile[threadIdx.y][threadIdx.x] = input[y * width + x];
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    y = blockIdx.x * BLOCK_SIZE + threadIdx.y;
+
+    if (x < height && y < width) {
+        output[y * height + x] = tile[threadIdx.x][threadIdx.y];
+    }
+}
+
+// Kernel avec padding
+__global__ void matrixTransposeWithPadding(float *input, float *output, int width, int height) {
+    __shared__ float tile[BLOCK_SIZE][PADDED_BLOCK_SIZE];
+
+    int x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    int y = blockIdx.y * BLOCK_SIZE + threadIdx.y;
+
+    if (x < width && y < height) {
+        tile[threadIdx.y][threadIdx.x] = input[y * width + x];
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    y = blockIdx.x * BLOCK_SIZE + threadIdx.y;
+
+    if (x < height && y < width) {
+        output[y * height + x] = tile[threadIdx.x][threadIdx.y];
+    }
+}
+
+int main() {
+    const int width = 1024;
+    const int height = 1024;
+    const int size = width * height * sizeof(float);
+
+    float *h_input = (float *)malloc(size);
+    float *h_output = (float *)malloc(size);
+    float *d_input, *d_output;
+
+    cudaMalloc(&d_input, size);
+    cudaMalloc(&d_output, size);
+
+    // Initialiser les données d'entrée
+    for (int i = 0; i < width * height; ++i) {
+        h_input[i] = static_cast<float>(i);
+    }
+    cudaMemcpy(d_input, h_input, size, cudaMemcpyHostToDevice);
+
+    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 gridDim((width + BLOCK_SIZE - 1) / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+    // Temps d'exécution des deux kernels
+    cudaEvent_t start, stop;
+    float elapsedTime;
+
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    // Kernel sans padding
+    cudaEventRecord(start, 0);
+    matrixTransposeNoPadding<<<gridDim, blockDim>>>(d_input, d_output, width, height);
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsedTime, start, stop);
+    printf("Temps d'exécution (sans padding) : %f ms\n", elapsedTime);
+
+    // Kernel avec padding
+    cudaEventRecord(start, 0);
+    matrixTransposeWithPadding<<<gridDim, blockDim>>>(d_input, d_output, width, height);
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsedTime, start, stop);
+    printf("Temps d'exécution (avec padding) : %f ms\n", elapsedTime);
+
+    // Libérer la mémoire
+    free(h_input);
+    free(h_output);
+    cudaFree(d_input);
+    cudaFree(d_output);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    return 0;
+}
